@@ -45,6 +45,8 @@ import {
   moveItem,
   subscribeItems,
   updateItem,
+  fetchShoppingListItems,
+  convertShoppingListItemToTodoItem,
 } from "../../../data/todo";
 import { showConfirmationDialog } from "../../../dialogs/generic/show-dialog-box";
 import type { HomeAssistant } from "../../../types";
@@ -451,7 +453,16 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
       : undefined;
   }
 
+  private _isShoppingList(): boolean {
+    if (!this._entityId || !this.hass?.entities) {
+      return false;
+    }
+    const entityReg = this.hass.entities[this._entityId];
+    return entityReg?.platform === "shopping_list";
+  }
+
   private _renderItems(items: TodoItem[], unavailable = false) {
+    const isShoppingList = this._isShoppingList();
     return html`
       ${repeat(
         items,
@@ -469,6 +480,11 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
           const due = this._getDueDate(item);
           const today =
             due && !item.due!.includes("T") && isSameDay(new Date(), due);
+
+          // Shopping list item details
+          const hasShoppingDetails =
+            isShoppingList && (item.quantity || item.unit || item.category);
+
           return html`
             <ha-check-list-item
               left
@@ -476,7 +492,9 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
               class="editRow ${classMap({
                 draggable: item.status !== TodoItemStatus.Completed,
                 completed: item.status === TodoItemStatus.Completed,
-                multiline: Boolean(item.description || item.due),
+                multiline: Boolean(
+                  item.description || item.due || hasShoppingDetails
+                ),
               })}"
               .selected=${item.status === TodoItemStatus.Completed}
               .disabled=${unavailable}
@@ -495,6 +513,25 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
             >
               <div class="column">
                 <span class="summary">${item.summary}</span>
+                ${hasShoppingDetails
+                  ? html`<div class="shopping-details">
+                      ${item.quantity
+                        ? html`<span class="detail-item">
+                            <span class="detail-value">${item.quantity}</span>
+                            ${item.unit
+                              ? html`<span class="detail-unit"
+                                  >${item.unit}</span
+                                >`
+                              : nothing}
+                          </span>`
+                        : nothing}
+                      ${item.category
+                        ? html`<span class="detail-item category">
+                            <span class="detail-label">${item.category}</span>
+                          </span>`
+                        : nothing}
+                    </div>`
+                  : nothing}
                 ${item.description
                   ? html`<ha-markdown-element
                       class="description"
@@ -563,9 +600,42 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
     if (!(this._entityId in this.hass.states)) {
       return;
     }
-    this._unsubItems = subscribeItems(this.hass!, this._entityId, (update) => {
-      this._items = update.items;
-    });
+
+    // For shopping lists, use subscription for real-time updates
+    // and fetch from shopping_list/items for quantity/unit/category
+    if (this._isShoppingList()) {
+      // Initial fetch with extended fields
+      await this._fetchShoppingListItems();
+
+      // Subscribe for real-time updates, re-fetch when items change
+      this._unsubItems = subscribeItems(
+        this.hass!,
+        this._entityId,
+        async (_update) => {
+          // Re-fetch from shopping_list/items to get quantity/unit/category
+          await this._fetchShoppingListItems();
+        }
+      );
+    } else {
+      this._unsubItems = subscribeItems(
+        this.hass!,
+        this._entityId,
+        (update) => {
+          this._items = update.items;
+        }
+      );
+    }
+  }
+
+  private async _fetchShoppingListItems(): Promise<void> {
+    if (!this.hass) return;
+    try {
+      const shoppingListItems = await fetchShoppingListItems(this.hass);
+      this._items = shoppingListItems.map(convertShoppingListItemToTodoItem);
+    } catch {
+      // Silently handle errors - items will remain undefined
+      this._items = [];
+    }
   }
 
   private _getItem(itemId: string) {
@@ -891,6 +961,41 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
 
     .due.overdue {
       color: var(--warning-color);
+    }
+
+    .shopping-details {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      font-size: var(--ha-font-size-s);
+      color: var(--secondary-text-color);
+      margin-top: 4px;
+    }
+
+    .shopping-details .detail-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .shopping-details .detail-value {
+      font-weight: 500;
+    }
+
+    .shopping-details .detail-unit {
+      opacity: 0.8;
+    }
+
+    .shopping-details .category {
+      background-color: var(--primary-color);
+      color: var(--text-primary-color);
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: var(--ha-font-size-xs);
+    }
+
+    .completed .shopping-details {
+      opacity: 0.6;
     }
 
     .completed .due.overdue {

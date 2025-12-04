@@ -1132,6 +1132,10 @@
           "due": "Due date",
           "completed_time": "Completed { datetime }",
           "not_all_required_fields": "Not all required fields are filled in",
+          "quantity_and_unit": "Quantity and unit",
+          "quantity": "Quantity",
+          "unit": "Unit",
+          "category": "Category",
           "confirm_delete": {
             "delete": "Delete item",
             "prompt": "Do you want to delete this item?"

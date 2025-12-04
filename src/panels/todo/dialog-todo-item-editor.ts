@@ -14,12 +14,19 @@ import { createCloseHeading } from "../../components/ha-dialog";
 import "../../components/ha-textarea";
 import "../../components/ha-textfield";
 import "../../components/ha-time-input";
+import "../../components/ha-select";
+import "@material/mwc-list/mwc-list-item";
 import {
   TodoItemStatus,
   TodoListEntityFeature,
   createItem,
+  createShoppingListItem,
   deleteItems,
   updateItem,
+  updateShoppingListItem,
+  fetchShoppingListCategories,
+  addShoppingListCategory,
+  removeShoppingListCategory,
 } from "../../data/todo";
 import { showConfirmationDialog } from "../../dialogs/generic/show-dialog-box";
 import { haStyleDialog } from "../../resources/styles";
@@ -50,6 +57,15 @@ class DialogTodoItemEditor extends LitElement {
 
   @state() private _submitting = false;
 
+  // Shopping list specific fields
+  @state() private _category = "";
+
+  @state() private _quantity?: number;
+
+  @state() private _unit = "";
+
+  @state() private _categories: string[] = [];
+
   // Dates are manipulated and displayed in the browser timezone
   // which may be different from the Home Assistant timezone. When
   // events are persisted, they are relative to the Home Assistant
@@ -75,11 +91,20 @@ class DialogTodoItemEditor extends LitElement {
       this._due = entry.due
         ? new Date(this._hasTime ? entry.due : `${entry.due}T00:00:00`)
         : undefined;
+      // Shopping list specific fields
+      this._category = entry.category || "";
+      this._quantity = entry.quantity ?? undefined;
+      this._unit = entry.unit || "";
     } else {
       this._hasTime = false;
       this._checked = false;
       this._due = undefined;
+      this._category = "";
+      this._quantity = undefined;
+      this._unit = "";
     }
+    // Fetch categories for shopping lists
+    this._loadCategories();
   }
 
   public closeDialog(): void {
@@ -92,6 +117,10 @@ class DialogTodoItemEditor extends LitElement {
     this._summary = "";
     this._description = "";
     this._hasTime = false;
+    // Reset shopping list fields
+    this._category = "";
+    this._quantity = undefined;
+    this._unit = "";
     fireEvent(this, "dialog-closed", { dialog: this.localName });
   }
 
@@ -202,6 +231,71 @@ class DialogTodoItemEditor extends LitElement {
                 </div>
               </div>`
             : nothing}
+          ${this._isShoppingList()
+            ? html`<div class="shopping-fields">
+                <div class="category-row">
+                  <ha-select
+                    class="category"
+                    .label=${this.hass.localize(
+                      "ui.components.todo.item.category"
+                    ) || "Category"}
+                    .value=${this._category}
+                    @selected=${this._handleCategoryChanged}
+                    @closed=${this._handleSelectClosed}
+                    .disabled=${!canUpdate}
+                    fixedMenuPosition
+                  >
+                    <mwc-list-item value=""></mwc-list-item>
+                    ${this._categories.map(
+                      (category) =>
+                        html`<mwc-list-item value=${category}
+                          >${category}</mwc-list-item
+                        >`
+                    )}
+                  </ha-select>
+                  <ha-icon-button
+                    .label=${"Add category"}
+                    .path=${"M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"}
+                    @click=${this._addNewCategory}
+                    .disabled=${!canUpdate}
+                  ></ha-icon-button>
+                  <ha-icon-button
+                    .label=${"Remove category"}
+                    .path=${"M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"}
+                    @click=${this._removeCategory}
+                    .disabled=${!canUpdate || !this._category}
+                  ></ha-icon-button>
+                </div>
+                <ha-textfield
+                  class="quantity"
+                  name="quantity"
+                  type="number"
+                  inputmode="decimal"
+                  .label=${this.hass.localize(
+                    "ui.components.todo.item.quantity"
+                  ) || "Quantity"}
+                  .value=${this._quantity ?? ""}
+                  @input=${this._handleQuantityChanged}
+                  .disabled=${!canUpdate}
+                ></ha-textfield>
+                <ha-select
+                  class="unit"
+                  .label=${this.hass.localize("ui.components.todo.item.unit") ||
+                  "Unit"}
+                  .value=${this._unit}
+                  @selected=${this._handleUnitChanged}
+                  @closed=${this._handleSelectClosed}
+                  .disabled=${!canUpdate}
+                  fixedMenuPosition
+                >
+                  <mwc-list-item value=""></mwc-list-item>
+                  <mwc-list-item value="pieces">pieces</mwc-list-item>
+                  <mwc-list-item value="kg">kg</mwc-list-item>
+                  <mwc-list-item value="grams">grams</mwc-list-item>
+                  <mwc-list-item value="liters">liters</mwc-list-item>
+                </ha-select>
+              </div>`
+            : nothing}
         </div>
         ${isCreate
           ? html`
@@ -308,6 +402,94 @@ class DialogTodoItemEditor extends LitElement {
     );
   }
 
+  private _isShoppingList(): boolean {
+    if (!this._params?.entity) {
+      return false;
+    }
+    const entityReg = this.hass?.entities[this._params.entity];
+    return entityReg?.platform === "shopping_list";
+  }
+
+  private async _loadCategories() {
+    if (!this._isShoppingList()) {
+      this._categories = [];
+      return;
+    }
+    try {
+      this._categories = await fetchShoppingListCategories(this.hass!);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to load categories:", err);
+      this._categories = [];
+    }
+  }
+
+  private _handleQuantityChanged(ev: Event) {
+    const value = (ev.target as HTMLInputElement).value;
+    this._quantity = value ? parseFloat(value) : undefined;
+  }
+
+  private _handleCategoryChanged(ev: CustomEvent) {
+    const target = ev.target as HTMLSelectElement;
+    this._category = target.value || "";
+  }
+
+  private async _addNewCategory() {
+    const newCategory = prompt("Enter new category name:");
+    if (newCategory && newCategory.trim()) {
+      try {
+        // Add the new category and refresh the list
+        this._categories = await addShoppingListCategory(
+          this.hass!,
+          newCategory.trim()
+        );
+        // Select the newly created category
+        this._category = newCategory.trim();
+      } catch (err: any) {
+        // eslint-disable-next-line no-console
+        console.error("Failed to add category:", err);
+        this._error = err?.message || "Failed to add category";
+      }
+    }
+  }
+
+  private async _removeCategory() {
+    if (!this._category) {
+      return;
+    }
+
+    const confirmed = await showConfirmationDialog(this, {
+      title: "Remove Category",
+      text: `Are you sure you want to remove the category "${this._category}"?`,
+      confirmText: "Remove",
+      destructive: true,
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await removeShoppingListCategory(this.hass!, this._category);
+      // Refresh categories and clear selection
+      this._categories = await fetchShoppingListCategories(this.hass!);
+      this._category = "";
+    } catch (err: any) {
+      // eslint-disable-next-line no-console
+      console.error("Failed to remove category:", err);
+      this._error = err?.message || "Failed to remove category";
+    }
+  }
+
+  private _handleSelectClosed(ev: Event) {
+    ev.stopPropagation();
+  }
+
+  private _handleUnitChanged(ev: CustomEvent) {
+    const target = ev.target as HTMLSelectElement;
+    this._unit = target.value || "";
+  }
+
   private async _createItem() {
     if (!this._summary) {
       this._error = this.hass.localize(
@@ -318,15 +500,25 @@ class DialogTodoItemEditor extends LitElement {
 
     this._submitting = true;
     try {
-      await createItem(this.hass!, this._params!.entity, {
-        summary: this._summary,
-        description: this._description,
-        due: this._due
-          ? this._hasTime
-            ? this._due.toISOString()
-            : this._formatDate(this._due)
-          : undefined,
-      });
+      // Use shopping list specific WebSocket API for shopping lists
+      if (this._isShoppingList()) {
+        await createShoppingListItem(this.hass!, this._params!.entity, {
+          name: this._summary,
+          quantity: this._quantity,
+          unit: this._unit || undefined,
+          category: this._category || undefined,
+        });
+      } else {
+        await createItem(this.hass!, this._params!.entity, {
+          summary: this._summary,
+          description: this._description,
+          due: this._due
+            ? this._hasTime
+              ? this._due.toISOString()
+              : this._formatDate(this._due)
+            : undefined,
+        });
+      }
     } catch (err: any) {
       this._error = err ? err.message : "Unknown error";
       return;
@@ -348,32 +540,54 @@ class DialogTodoItemEditor extends LitElement {
     const entry = this._params!.item!;
 
     try {
-      await updateItem(this.hass!, this._params!.entity, {
-        ...entry,
-        summary: this._summary,
-        description:
-          this._description ||
-          (this._todoListSupportsFeature(
-            TodoListEntityFeature.SET_DESCRIPTION_ON_ITEM
-          )
-            ? null
-            : undefined),
-        due: this._due
-          ? this._hasTime
-            ? this._due.toISOString()
-            : this._formatDate(this._due)
-          : this._todoListSupportsFeature(
-                TodoListEntityFeature.SET_DUE_DATETIME_ON_ITEM
-              ) ||
-              this._todoListSupportsFeature(
-                TodoListEntityFeature.SET_DUE_DATE_ON_ITEM
-              )
-            ? null
-            : undefined,
-        status: this._checked
-          ? TodoItemStatus.Completed
-          : TodoItemStatus.NeedsAction,
-      });
+      // Use shopping_list/items/update WebSocket for shopping lists
+      if (this._isShoppingList()) {
+        // Ensure quantity is a float (backend requires float)
+        const quantity =
+          this._quantity !== undefined && this._quantity !== null
+            ? parseFloat(String(this._quantity))
+            : undefined;
+        await updateShoppingListItem(this.hass!, {
+          ...entry,
+          summary: this._summary,
+          status: this._checked
+            ? TodoItemStatus.Completed
+            : TodoItemStatus.NeedsAction,
+          quantity:
+            quantity !== undefined && !Number.isNaN(quantity)
+              ? quantity
+              : undefined,
+          unit: this._unit || undefined,
+          category: this._category || undefined,
+        });
+      } else {
+        await updateItem(this.hass!, this._params!.entity, {
+          ...entry,
+          summary: this._summary,
+          description:
+            this._description ||
+            (this._todoListSupportsFeature(
+              TodoListEntityFeature.SET_DESCRIPTION_ON_ITEM
+            )
+              ? null
+              : undefined),
+          due: this._due
+            ? this._hasTime
+              ? this._due.toISOString()
+              : this._formatDate(this._due)
+            : this._todoListSupportsFeature(
+                  TodoListEntityFeature.SET_DUE_DATETIME_ON_ITEM
+                ) ||
+                this._todoListSupportsFeature(
+                  TodoListEntityFeature.SET_DUE_DATE_ON_ITEM
+                )
+              ? null
+              : undefined,
+          status: this._checked
+            ? TodoItemStatus.Completed
+            : TodoItemStatus.NeedsAction,
+        });
+      }
     } catch (err: any) {
       this._error = err ? err.message : "Unknown error";
       return;
@@ -474,6 +688,27 @@ class DialogTodoItemEditor extends LitElement {
         }
         .italic {
           font-style: italic;
+        }
+        .shopping-fields {
+          margin-top: 16px;
+        }
+        .shopping-fields {
+          display: flex;
+          flex-direction: column;
+          gap: 16px;
+          margin-top: 16px;
+        }
+        .shopping-fields ha-textfield,
+        .shopping-fields ha-select {
+          width: 100%;
+        }
+        .category-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .category-row ha-select {
+          flex: 1;
         }
       `,
     ];
