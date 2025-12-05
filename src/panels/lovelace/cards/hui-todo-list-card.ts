@@ -40,7 +40,6 @@ import {
   TodoItemStatus,
   TodoListEntityFeature,
   TodoSortMode,
-  createItem,
   deleteItems,
   moveItem,
   subscribeItems,
@@ -93,6 +92,9 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
   @state() private _items?: TodoItem[];
 
   @state() private _reordering = false;
+
+  // Shopping list items grouping by category
+  @state() private _groupByCategory = false;
 
   private _unsubItems?: Promise<UnsubscribeFunc>;
 
@@ -237,9 +239,41 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
     }
   }
 
+  private _toggleGroupByCategory() {
+    this._groupByCategory = !this._groupByCategory;
+  }
+
   protected render() {
     if (!this._config || !this.hass || !this._entityId) {
       return nothing;
+    }
+
+    // GROUPED VIEW HERE FOR SHOPPING LISTS
+    if (this._groupByCategory && this._isShoppingList()) {
+      const grouped = this._groupItemsByCategory(this._items || []);
+      return html`
+        <ha-card
+          .header=${this._config.title}
+          class=${classMap({
+            "has-header": "title" in this._config,
+          })}
+        >
+          <div class="group-toggle">
+            <ha-button @click=${this._toggleGroupByCategory}>
+              ${this._groupByCategory ? "Ungroup" : "Group by Category"}
+            </ha-button>
+          </div>
+
+          ${Object.entries(grouped).map(
+            ([category, items]) => html`
+              <div class="header category-header">
+                <h2>${category || "Uncategorized"}</h2>
+              </div>
+              ${this._renderItems(items)}
+            `
+          )}
+        </ha-card>
+      `;
     }
 
     const stateObj = this.hass.states[this._entityId];
@@ -282,6 +316,28 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
           "has-header": "title" in this._config,
         })}
       >
+        ${this._isShoppingList() // Shopping list specific buttons Group/Ungroup & Remove All
+          ? html`
+              <div class="group-toggle">
+                <!-- Group Button -->
+                <ha-button
+                  ?disabled=${!this._hasItems()}
+                  @click=${this._toggleGroupByCategory}
+                >
+                  ${this._groupByCategory ? "Ungroup" : "Group by Category"}
+                </ha-button>
+
+                <!-- Delete All Button -->
+                <ha-button
+                  class="delete-all"
+                  ?disabled=${!this._hasItems()}
+                  @click=${this._deleteAllItems}
+                >
+                  Delete All
+                </ha-button>
+              </div>
+            `
+          : nothing}
         ${!this._config.hide_create &&
         this._todoListSupportsFeature(TodoListEntityFeature.CREATE_TODO_ITEM)
           ? html`
@@ -302,8 +358,7 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
                   )}
                   .disabled=${unavailable}
                   @click=${this._addItem}
-                >
-                </ha-icon-button>
+                ></ha-icon-button>
               </div>
             `
           : nothing}
@@ -459,6 +514,45 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
     }
     const entityReg = this.hass.entities[this._entityId];
     return entityReg?.platform === "shopping_list";
+  }
+
+  // Group items by category for shopping lists
+  private _groupItemsByCategory(items: TodoItem[]): Record<string, TodoItem[]> {
+    const groups: Record<string, TodoItem[]> = {};
+
+    for (const item of items) {
+      const category = item.category || "";
+      if (!groups[category]) groups[category] = [];
+      groups[category].push(item);
+    }
+
+    return groups;
+  }
+
+  // For shopping lists only to remove all items at once
+  private async _deleteAllItems() {
+    if (!this.hass || !this._entityId || !this._items?.length) {
+      return;
+    }
+
+    const uids = this._items.map((item) => item.uid);
+
+    const confirmed = await showConfirmationDialog(this, {
+      title: "Delete All Items",
+      text: `Are you sure you want to delete all ${uids.length} items?`,
+      confirmText: "Delete",
+      dismissText: "Cancel",
+      destructive: true,
+    });
+
+    if (!confirmed) return;
+
+    await deleteItems(this.hass, this._entityId, uids);
+  }
+
+  // Check if there are any items in the shopping list
+  private _hasItems(): boolean {
+    return Array.isArray(this._items) && this._items.length > 0;
   }
 
   private _renderItems(items: TodoItem[], unavailable = false) {
@@ -747,7 +841,7 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
   }
 
   private _addItem(ev): void {
-    const newItem = this._newItem;
+    /** const newItem = this._newItem;
     if (newItem.value!.length > 0) {
       createItem(this.hass!, this._entityId!, {
         summary: newItem.value!,
@@ -757,7 +851,14 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
     newItem.value = "";
     if (ev) {
       newItem.focus();
-    }
+    } */
+
+    ev.stopPropagation();
+
+    // 1. Open the popup normally (CREATE mode)
+    showTodoItemEditDialog(this, {
+      entity: this._entityId!,
+    });
   }
 
   private _deleteItem(ev): void {
@@ -770,7 +871,7 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
 
   private _addKeyPress(ev): void {
     if (ev.key === "Enter") {
-      this._addItem(null);
+      this._addItem(ev);
     }
   }
 
@@ -1037,6 +1138,17 @@ export class HuiTodoListCard extends LitElement implements LovelaceCard {
 
     .warning {
       color: var(--error-color);
+    }
+
+    .group-toggle {
+      display: flex;
+      justify-content: flex-end;
+      padding: 8px 16px 0;
+    }
+
+    .delete-all {
+      color: var(--error-color);
+      margin-left: 8px;
     }
   `;
 }

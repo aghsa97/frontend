@@ -27,6 +27,7 @@ import {
   fetchShoppingListCategories,
   addShoppingListCategory,
   removeShoppingListCategory,
+  fetchShoppingListItems,
 } from "../../data/todo";
 import { showConfirmationDialog } from "../../dialogs/generic/show-dialog-box";
 import { haStyleDialog } from "../../resources/styles";
@@ -154,11 +155,6 @@ class DialogTodoItemEditor extends LitElement {
             : ""}
 
           <div class="flex">
-            <ha-checkbox
-              .checked=${this._checked}
-              @change=${this._checkedCanged}
-              .disabled=${isCreate || !canUpdate}
-            ></ha-checkbox>
             <ha-textfield
               class="summary"
               name="summary"
@@ -315,21 +311,6 @@ class DialogTodoItemEditor extends LitElement {
               >
                 ${this.hass.localize("ui.components.todo.item.save")}
               </ha-button>
-              ${this._todoListSupportsFeature(
-                TodoListEntityFeature.DELETE_TODO_ITEM
-              )
-                ? html`
-                    <ha-button
-                      slot="secondaryAction"
-                      variant="danger"
-                      appearance="plain"
-                      @click=${this._deleteItem}
-                      .disabled=${this._submitting}
-                    >
-                      ${this.hass.localize("ui.components.todo.item.delete")}
-                    </ha-button>
-                  `
-                : ""}
             `}
       </ha-dialog>
     `;
@@ -490,7 +471,7 @@ class DialogTodoItemEditor extends LitElement {
     this._unit = target.value || "";
   }
 
-  private async _createItem() {
+  /** private async _createItem() {
     if (!this._summary) {
       this._error = this.hass.localize(
         "ui.components.todo.item.not_all_required_fields"
@@ -525,6 +506,86 @@ class DialogTodoItemEditor extends LitElement {
     } finally {
       this._submitting = false;
     }
+    this.closeDialog();
+  } */
+
+  private async _createItem() {
+    if (!this._summary) {
+      this._error = this.hass.localize(
+        "ui.components.todo.item.not_all_required_fields"
+      );
+      return;
+    }
+
+    this._submitting = true;
+
+    try {
+      if (this._isShoppingList()) {
+        // --- STEP 1: Load existing items ---
+        const items = await fetchShoppingListItems(this.hass);
+
+        // Normalize comparison fields
+        const newName = this._summary.trim().toLowerCase();
+        const newCategory = (this._category || "").trim();
+        const newUnit = (this._unit || "").trim();
+
+        // --- STEP 2: Try to find a matching existing item ---
+        const match = items.find(
+          (item) =>
+            item.name.trim().toLowerCase() === newName &&
+            (item.category || "") === newCategory &&
+            (item.unit || "") === newUnit
+        );
+
+        if (match) {
+          // 3️⃣ Merge quantity
+          const existingQty = match.quantity || 0;
+          const addedQty = this._quantity || 1;
+          const newQuantity = existingQty + addedQty;
+
+          // console.log("Merging with existing item:", match, "→", newQuantity);
+
+          await updateShoppingListItem(this.hass!, {
+            uid: match.id,
+            summary: match.name,
+            quantity: newQuantity,
+            unit: newUnit || undefined,
+            category: newCategory || undefined,
+            status: match.complete
+              ? TodoItemStatus.Completed
+              : TodoItemStatus.NeedsAction,
+          });
+
+          this.closeDialog();
+          return;
+        }
+
+        // --- STEP 4: No match found → Create new item normally ---
+        await createShoppingListItem(this.hass!, this._params!.entity, {
+          name: this._summary,
+          quantity: this._quantity,
+          unit: this._unit || undefined,
+          category: this._category || undefined,
+        });
+      } else {
+        // Default Todo behavior
+        await createItem(this.hass!, this._params!.entity, {
+          summary: this._summary,
+          description: this._description,
+          due: this._due
+            ? this._hasTime
+              ? this._due.toISOString()
+              : this._formatDate(this._due)
+            : undefined,
+        });
+      }
+    } catch (err: any) {
+      this._error = err ? err.message : "Unknown error";
+      return;
+    } finally {
+      this._submitting = false;
+    }
+
     this.closeDialog();
   }
 
