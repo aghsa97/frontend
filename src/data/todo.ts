@@ -141,7 +141,7 @@ export const removeShoppingListCategory = async (
 ): Promise<void> => {
   await hass.callWS({
     type: "shopping_list/categories/remove",
-    category,
+    name: category,
   });
 };
 
