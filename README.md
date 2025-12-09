@@ -30,8 +30,8 @@ Purpose: Extend the To-Do data model and backend interaction layer.
 
 Changes:
 
-- Added new fields and functions to the TodoItem interface to support extended metadata (e.g., category, notes, quantity, etc.).
-- Updated TypeScript types used by the todo API endpoints.
+- Added new fields and functions to the TodoItem interface to support extended metadata (e.g., category, quantity, unit).
+- Updated/added API endpoints.
 - Modified fetch/update/create/delete helpers to correctly transmit newly added properties.
 
 #### 2. src/panels/lovelace/todo/dialog-todo-item-editor.ts
